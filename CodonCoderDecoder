@@ -1,7 +1,6 @@
 #~/usr/bin/python2.7
 
-# Codon Base Coder & Decoder: Decode or Code a message using the codons and their amino acid
-# Inverses.
+# Codon Base Coder & Decoder: Decode or Code a message using the codons and their amino acid shorthand characters for the inverse messaging
 
 def decoder(string):
     ToDecode = string.strip('1234567890,()[]')
