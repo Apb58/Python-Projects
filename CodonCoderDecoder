@@ -1,0 +1,48 @@
+#~/usr/bin/python2.7
+
+# Codon Base Coder & Decoder: Decode or Code a message using the codons and their amino acid
+# Inverses.
+
+def decoder(string):
+    ToDecode = string.strip('1234567890,()[]')
+    Codon_Map = {'GTC': 'V', 'ACC': 'T', 'GTA': 'V', 'GTG': 'V', 'GTT': 'V', 'AAC': 'N', 'CCT': 'P', 'TGG': 'W', 'AGC': 'S', 'ATC': 'I', 'CAT': 'H', 'AAT': 'N', 'AGT': 'S', 'ACT': 'T', 'CAC': 'H', 'ACG': 'T', 'CCG': 'P', 'CCA': 'P', 'ACA': 'T', 'CCC': 'P', 'TGT': 'C', 'GGT': 'G', 'TCT': 'S', 'GCG': 'A', 'TGC': 'C', 'CAG': 'Q', 'GAT': 'D', 'TAT': 'Y', 'CGG': 'R', 'TCG': 'S', 'AGG': 'R', 'GGG': 'G', 'TCC': 'S', 'TCA': 'S', 'TAA': 'Stop', 'GGA': 'G', 'TAC': 'Y', 'GAC': 'D', 'GAA': 'E', 'ATA': 'I', 'GCA': 'A', 'CTT': 'L', 'GGC': 'G', 'ATG': 'M', 'TGA': 'Stop', 'CTG': 'L', 'GAG': 'E', 'CTC': 'L', 'AGA': 'R', 'CTA': 'L', 'GCC': 'A', 'AAA': 'K', 'AAG': 'K', 'CAA': 'Q', 'TTT': 'F', 'CGT': 'R', 'CGA': 'R', 'GCT': 'A', 'TAG': 'Stop', 'ATT': 'I', 'TTG': 'L', 'TTA': 'L', 'CGC': 'R', 'TTC': 'F', 'AUU': 'U', 'UUU': 'O'}
+    # codon_length = 3
+    Codon_String = [ToDecode[i:i+3] for i in range(0, len(ToDecode), 3)]
+    Decoded = [] #list to store our decoded message
+    for codon in Codon_String:
+        if Codon_Map[codon] != 'Stop':
+            Decoded.append(Codon_Map[codon])
+        elif Codon_Map[codon] is 'Stop':
+            Decoded.append('. ')
+
+    return ''.join(Decoded)
+
+def coder(string):
+    ToCode = string.strip('1234567890,()[]')
+    Code_Map = {'A': 'GCT', 'M': 'ATG', 'C': 'TGC', 'E': 'GAA', 'D': 'GAC', 'G': 'GGC', 'F': 'TTC', 'I': 'ATT', 'H': 'CAC', 'K': 'AAA', 'Stop': 'TAA', 'L': 'TTG', 'N': 'AAT', 'Q': 'CAG', 'P': 'CCC', 'S': 'TCA', 'R': 'CGC', 'T': 'ACT', 'W': 'TGG', 'V': 'GTT', 'Y': 'TAC', 'U': 'AUU', 'O': 'UUU'}
+    #Note: because the dictonary can only store unique keys for each letter, all characters will use the same codon (rather than having multiple codon options for a single char)
+    Code = [] #Store our Coded Message
+    for i in range(0, len(ToCode)):
+        if ToCode[i] != '.':
+            char = ToCode[i]
+            Code.append(Code_Map[char])
+        elif ToCode[i] is '.':
+            Code.append(Code_Map['Stop'])
+
+    return ''.join(Code)
+    
+    
+def Start():
+    string = raw_input('Code or Decode?: ')
+    if string == 'Code':
+        new_string = raw_input('Code Message (No Bs, All CAPITALS, Use . for spaces): ')
+        print coder(new_string)
+    if string == 'Decode':
+        new_string = raw_input('Decode Message (must be codon form):')
+        print decoder(new_string)
+    if string is not 'Code' or 'Decode':
+        print('Please select one of the options!')
+        Start()
+
+
+Start()
