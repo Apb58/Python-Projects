@@ -1,2 +1,3 @@
 # Python-Projects
-Projects or fun applications written in Python!
+
+Small Projects or Fun applications written in Python
