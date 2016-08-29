@@ -1,0 +1,8 @@
+chr5:112175600
+Ref:A
+Alt:
+Frequency:44.5
+chr7:148544399
+Ref:T
+Alt:GGG
+Frequency:30.5
