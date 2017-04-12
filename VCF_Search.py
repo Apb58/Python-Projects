@@ -1,4 +1,4 @@
-# Program to Search extremely large VCFs for variants at specific genomic positions/specific variant types
+# Program to Search large VCFs for variants at specific genomic positions/specific variant types
 # 04/12/17
 # Adrian Bubie
 
