@@ -1,9 +1,9 @@
-# Program to Search large VCFs for variants at specific genomic positions/specific variant types
+# Program to Search large VCFs for variants at specific genomic positions
 # 04/12/17
 # Adrian Bubie
 
 # This script reads in a VCF and breaks down each line of the VCF to determine if the search criteria are met for a
-# particular line; this is meant to be a faster search than just grep-ing the file (regex)
+# particular line.
 
 def brk_line_positions(Lines, chr_coordinate, pos_coordinate):
 
