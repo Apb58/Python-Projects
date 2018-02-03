@@ -1,11 +1,13 @@
-#!/usr/bin/python3
+#!/Users/Adrian/miniconda3/bin/python3
 # Adrian Bubie
-#12/14/17
+# 1/12/18
 
 ## PCR_Deduper: 
 ## Argparse arguments - sam file (abs path), paired-end flag (boolean), UMI file (abs path), and help
 import textwrap
 import random
+import fileinput
+import os
 import argparse as ap
 
 def get_arguments():
@@ -19,22 +21,19 @@ def get_arguments():
     '''))
     parser.add_argument("-f", help="Sorted SAM file to be processed. Must include absolute path the file. <str>", required=True, type=str)
     parser.add_argument("-p", help="If passed as 'True', SAM data is considered paired-ended. <boolean> (def=False)", required=False, type=bool, default=False)
-    parser.add_argument("-umi", help="Optional file to define UMI sequences (one UMI per line). UMIs are assumed to be in the last field of the QNAME for each read. Reads with invalid UMIs are filtered from final output. If file not specified, SAM is assumed to use randomers. Must include absolute path to file <str>", required=False, type=str, default='')
+    parser.add_argument("-u", help="Optional file to define UMI sequences (one UMI per line). UMIs are assumed to be in the last field of the QNAME for each read. Reads with invalid UMIs are filtered from final output. If file not specified, SAM is assumed to use randomers. Must include absolute path to file <str>", required=False, type=str, default='')
     parser.add_argument("-dup_keep", help="Optional argument to designate which read to keep of a duplicate set. 'Q' will keep read with highest quality score, 'R' will choose a random read to keep. No specification will keep the first read encounted. <str>", required=False, type=str, default='')
     parser.add_argument("-s", help="Set to 'True' for additional summary file output <boolean> (def='False')", required=False, type=bool, default=False)
     return parser.parse_args()
-
-args = get_arguments()
 
 
 class Read:
     """ Read object: object called to get read parts from SAM file lines, or change attributes """
     def __init__(self, line):
-        self.chr = line.split('\t')[2]
-        self.flag = int(line.split('\t')[1])
-        self.tag = line.split('\t')[0].split(':')[-1]
-        self.seq = line.split('\t')[9]
-        self.cig = line.split('\t')[5]
+        self.chr = line.split('\t')[2] # Get chromosome
+        self.flag = int(line.split('\t')[1]) # Get bitwise flag
+        self.tag = line.split('\t')[0].split(':')[-1] # Get UMI/randomer tag from Read Name
+        self.cig = line.split('\t')[5] # Get the cigar string
 
         if 'S' in self.cig and self.cig.find('S')+1 < len(self.cig): # If the read is softclipped on the 5'-end (given by CIGAR) we need to adjust the position
             adj = int(self.cig[:self.cig.find('S')])
@@ -42,8 +41,12 @@ class Read:
         else:
             self.pos = int(line.split('\t')[3]) # No soft-clipping on 5'-end, keep the value of the POS column.
 
-        self.qual = int(line.split('\t')[4])
-        self.raw = line
+        self.qual = int(line.split('\t')[4]) # Get the quality score of the read
+        self.strand = flag_stat(self.flag) # Call the bitwise flag checker and get the strand of the read
+
+        self.chars = [str(self.tag),str(self.strand),str(self.chr),str(self.pos)] # Create read true characteristics list
+
+        self.raw = line # Keep copy of the input line
 
 
 def umi_list(umi_file):
@@ -53,7 +56,7 @@ def umi_list(umi_file):
         return [line.strip('\n') for line in ulist.readlines()]
 
 
-def flag_stat(flag, paired):
+def flag_stat(flag):
     '''Bitwise flag checker: checks read flag and returns the strand of the read. 
     If the paired-end argument passed as True, which read in the pair the read is 
     checked and returned.'''
@@ -64,241 +67,207 @@ def flag_stat(flag, paired):
 
     return strand
 
-    # If the file is specified as paired-ended:
-    #if paired == True:
-    #    if (flag & 40) == 40 and (flag & 80) != 80:
-    #        pair = 1
-    #    elif (flag & 40) != 40 and (flag & 80) == 80:
-    #        pair = 2
 
-    #    return pair
+def true_char(file_in):
+    '''Takes in the input file and appends a new column with the "true characteristics"; the chr, umi/randomer, strand, and position. 
+    Position may be adjusted from what is given in the read based on soft-clipping at the 5'-end (see Read object class) This modifies 
+    the input file directly, but will be fixed in the final steps to keep the SAM format of the file correct.'''
 
+    for line in fileinput.input(file_in, inplace=True): # inplace here meaning each line is written back to it's original place in the file
+        if line.startswith('@'):  # If a header line, just write back to the file, don't modify
+            print(line.strip('\n'))
 
-def dup_remover(reads, dups, dup_keep):
-    '''Takes list of reads and list of duplicates, and removes the correct duplicates from the reads
-    based on the dup_keep flag. Returns a subset of the total reads list.'''
-
-    to_keep = [] # Initialize list of reads to keep; note that this will only ever be one item long, but is easy to use to remove the rest of the duplicates
-
-    if dup_keep == 'Q': # If Quality flag has been specified, keep read only with the largest MAPQ 
-        max_q = 0
-        for read in dups:
-            if Read(read).qual >= max_q:
-                max_q = Read(read).qual
-                keep = read
-        to_keep.append(keep)
-
-    elif dup_keep == 'R': # If Random flag has been specified, keep a random duplicate
-        to_keep.append((random.choice(dups)))
-        
-    elif dup_keep == '': # Otherwise, keep the first duplicate
-        to_keep.append(dups[-1]) # This is equivalent to the first read used to compare, since it is added to the duplicates last
-        
-
-    dups = [y for y in dups if y not in to_keep]
-    sub_reads = [x for x in reads if x not in dups]
-
-    return sub_reads
-
-
-def dedup_chunk(chunk, dup_keep, paired):
-    '''Takes in chunk of reads (list), and uses the first read in the chunk as the comparitor.
-    Uses this read to determine any PCR duplicates of the read in the chunk. Each read's POS is adjusted
-    if needed based on the CIGAR field (for soft clipping), and strand orientation is determined from the FLAG before
-    reads are compared. Duplicates are then removed from list of reads, and deduped chunk is returned.'''
-
-    set_of_reads = chunk
-    removed = 0 # Initialize the number of reads removed as dups
-    r_std = Read(chunk[0]) # Create comparitor read from first read in chunk
-    dups = []
-
-    for i in range(1,len(chunk)):
-        pos_dup = Read(chunk[i])
-        if flag_stat(r_std.flag, paired) == flag_stat(pos_dup.flag, paired): #First check if the reads have the same strand
-            if pos_dup.pos == r_std.pos and pos_dup.tag == r_std.tag: #If tag (UMI/randomer) and positions match for reads:
-                dups.append(pos_dup.raw)
-    
-    if len(dups) > 0:
-        dups.append(r_std.raw)
-        set_of_reads = dup_remover(chunk, dups, dup_keep)
-        removed = int(len(chunk)-len(set_of_reads)) # Count of reads removed from chunk, for summary file
-
-    return [set_of_reads, removed]
-
-
-def read_chunker(line, umis, dup_keep, paired, summary, out_file):
-    '''Takes line from SAM file and list of UMIs, if available, and checks that  
-    line has valid UMI. If empty UMI list is provided, then reads assumed to use
-    randomers. Once validated, lines are read from file and stored in list 
-    until read positions exceed maximum read length is found.'''
-
-    read1 = Read(line) # create Read object from SAM line
-    lines_proc = 0 # Counter to track number reads read in (only used in summary file)
-    removed_cd = 0 # Counter to track number of duplicates removed (only used in summary file)
-    removed_cu = 0 # Counter to track number of reads removed for incorrect UMIs (only used in summary file)
-    lines_added = 0 # Total number of non-header lines added to the file (only used in summary file)
-
-    if umis != []: # If UMIs are used:
-        # Check the umi tag on read1
-        utag = read1.tag
-        while utag not in umis: # if utag not in umis, read file lines until a read is found with a valid umi.
-            read1 = Read(SAM.readline())
-            utag = read1.tag
-            lines_proc = lines_proc + 1
-            removed_cu = removed_cu + 1 # Increment the number of lines removed for incorrect UMI tag by 1
         else:
-            pass
+            read = Read(line) # take the line and create a Read object from it
+            print(line.strip('\n')+'\t'+':'.join(read.chars)) # Add the true characteristics to a new column at the end of each read
 
-    # Get length of the read, then add it to read1 pos to find cut-off for position chunk
-    r_len = len(read1.seq)
 
-    # Create list to store chunk of reads
-    chunk = []
-    chunk.append(read1.raw) #Add in first read
-    read2 = ''
+def sort_by_true(file_in):
+    '''Takes in imput file and resorts it by the "true position" of each read, meaning the positions post-softclipping adjustment
+    The SAM file is sorted 100000 lines at a time and written out to an 'Output.sam' temporary file, which will be deduped. The output
+    of this function is the newly sorted Output file.'''
 
-    while read1: # Until the end of the SAM file
+    with open(file_in, 'r') as SAM:
+        line = SAM.readline() # Read first line of the file
 
-        read2 = SAM.readline() # Read in the next line of the SAM
-        lines_proc = lines_proc + 1 # Increment the number of reads read in
+        while line.startswith('@'): # Keep the header lines as they are (write the header to Output). Stop when you hit the first read line
+            with open('Output.sam','a') as out:
+                out.write(line)
+            line = SAM.readline()
 
-        if read2 == '':
-            break
-        
-        read2 = Read(read2) # create Read object from read2
+        reads_proc = 0 # Counter for number of reads (not including headers) processed
 
-        while read2.pos <= read1.pos+r_len and read2.chr == read1.chr: # Check to see if the position of the next read is within the first read's position + read length, then add it to the chunk
-            # If umis passed in, only add reads if they have a valid umi:
-            if umis != []:
-                if read2.tag in umis:
-                    chunk.append(read2.raw)
-                    read2 = SAM.readline()
-                    lines_proc = lines_proc + 1
-                    if read2 == '':
-                        break
+        while line:
+            to_sort = [] # List to store read chunk to sort
+            i = 0 # indexer
 
-                    read2 = Read(read2) # read in the next line
-
-                else:
-                    read2 = SAM.readline()
-                    lines_proc = lines_proc + 1
-                    removed_cu = removed_cu + 1 # Increment the number of lines removed for incorrect UMI tag by 1
-                    if read2 == '':
-                        break
-
-                    read2 = Read(read2) # if tag is wrong, just read in next line, and don't add read
-
-            else: # If umis not passed in, don't do additional check
-                chunk.append(read2.raw)
-                read2 = SAM.readline()
-                lines_proc = lines_proc + 1
-                if read2 == '':
+            while i < 100001: # Grab 100000 reads at a time from the file
+                to_sort.append(line.split(':')) # Split each read into a list and add to the sort list
+                line = SAM.readline() 
+                if line == '': # Stop if you get to the end of the file (before you reach the 100000 size limit)
                     break
 
-                read2 = Read(read2) # read in the next line
+                i += 1
+                reads_proc += 1
+
+            sortee = sorted(sorted(sortee, key=lambda read: int(read[-1].strip('\n'))), key=lambda read: int(read[-2].strip('\t'))) # Sort the reads based on the true position (last 2 items in each list)
             
 
-        while len(chunk) > 1 and read1.pos+r_len < read2.pos: # Once the chunk is determined, start with the first read and compare it to all the reads in the chunk as potential dups.
-            #print([c.split('\t')[3] for c in chunk])
-            process = dedup_chunk(chunk, dup_keep, paired)
-            chunk = process[0]
-            #print([c.split('\t')[3] for c in chunk])
-            removed_cd = removed_cd + process[1]
+            for i in range(0,len(sortee)):
+                sortee[i] = ':'.join(sortee[i]) # Mend each read back together
 
-            if len(chunk) > 1: # Once the comparison is done, and there is more than one read left in the chunk after deduping, remove the first read from the chunk and start the comparison again with the next read in the chunk. Continue until only one read remains in the chunk:
-                with open(out_file,'a') as out:
-                    if umis != [] and Read(chunk[0]).tag in umis:
-                        out.write(chunk[0])
-                        lines_added = lines_added + 1
-                    elif umis == []:
-                        out.write(chunk[0])
-
-                read1 = Read(chunk[1])
-                chunk = chunk[1:]
-
-        if len(chunk) > 1:
-            chunk.append(read2.raw)
-
-        if len(chunk) == 1: # reset the chunk when there is only one read left, by removing the last read (nothing left to compare for duplicates) and starting a new chunk with the last read read in but NOT included (last read2):
-            #print(chunk[0].split('\t')[3])
-            with open(out_file,'a') as out:
-                if umis != [] and Read(chunk[0]).tag in umis:
-                    out.write(chunk[0])
-                    lines_added = lines_added + 1
-                elif umis == []:
-                    out.write(chunk[0])
-
-            chunk = []
-            chunk.append(read2.raw)
-            read1 = Read(chunk[0])
+            with open('Output.sam','a') as out: 
+                out.writelines(sortee) # Write the "true" sorted reads to the temp output file Output.sam
+    
+    return reads_proc
 
 
-    while len(chunk) > 1: # This additional loop is required to catch the final, non-empty reads of the file if loop is broken because of a break from EOF:
-        #print([c.split('\t')[3] for c in chunk])
-        process = dedup_chunk(chunk, dup_keep, paired)
-        chunk = process[0]
-        #print([c.split('\t')[3] for c in chunk])
-        removed_cd = removed_cd + process[1]
+def dup_remover(file_in, file_out, umis, dup_keep):
+    ''' Takes in the temp output file from sort_by_true and removes all duplicates by checking the final column (characteristics)
+    of adjacent reads, sequentially. If the umi flag was specified and a set of UMIs passed in, reads with invalid umis are removed from the
+    final file. The read to keep among duplicate reads is specifed by the dup_keep flag.'''
+    
+    #As reads are now sorted by soft-clipping adjusted positions, PCR duplicates with given POS that
+    #were previously sorted apart should now be grouped together, such that stepping through the file 
+    #comparing reads next to each other will capture all PCR duplicates
 
-        if len(chunk) > 1:
-            with open(out_file,'a') as out:
-                if umis != [] and Read(chunk[0]).tag in umis:
-                    out.write(chunk[0])
-                    lines_added = lines_added + 1
-                elif umis == []:
-                    out.write(chunk[0])
-                
-            read1 = Read(chunk[1])
-            chunk = chunk[1:]
+    with open(file_in,'r') as SAM:
 
-    if len(chunk) == 1: 
-        #print(chunk[0].split('\t')[3])
-        with open(out_file,'a') as out:
-            if umis != [] and Read(chunk[0]).tag in umis:
-                out.write(chunk[0])
-                lines_added = lines_added + 1
-            elif umis == []:
-                out.write(chunk[0])
-
-
-    if summary == True: # If specified that the user wants the summary output file:
-        with open('Dedup_summary.out','w') as sum_out:
-            sum_out.write("Summary of PCR duplicate removal for "+out_file.split('/')[-1]+":\n")
-            sum_out.write(str("Number of Reads Processed: "+str(lines_proc)+"\n"))
-            sum_out.write(str("Number of Reads Removed as Dups: "+str(removed_cd)+"\n"))
-            sum_out.write(str("Number of Reads Removed for Incorrect UMIs: "+str(removed_cu)+"\n"))
-            sum_out.write(str("Number of Non-duplicate, remaining reads: "+str(lines_added)+"\n"))
-
-
-### Main Function: ###
-
-# Set an error for paired-end argument at this time:
-if args.p == True:
-    raise ValueError('Cannot Currently Process Paired reads. Please do not specify flag at this time')
-
-if args.dup_keep not in ['Q','R','']:
-    raise ValueError('Duplicate Keep argument is not valid, must use "Q", "R", or ""')
-
-# If UMI file given, create list of tags; otherwise, leave it as an empty list:
-umis = []
-if args.umi != '':
-    umis = umi_list(args.umi)
-
-with open(args.f, 'r') as SAM:
-
-    line = SAM.readline() # Read in first line of the SAM file
-
-    # Read through all header lines and store for output file writing:
-    header = []
-    while line.startswith('@') == True:
-        header.append(line)
+        removed_d = 0 # Counter for the number of reads removed as duplicates
+        removed_u = 0 # Counter for the number of reads removed for invalid UMI tags
         line = SAM.readline()
 
-    if header != []: # If header is read in, write it to the deduped output file:
-        with open((args.f.strip('.sam'))+'_deduped.sam','a') as out:
-            out.write(''.join(header))
+        while line.startswith('@'): # Read lines until the header lines are all read in (write these to final output sam)
+            with open(file_out,'a') as out_sam:
+                out_sam.write(line)
+            line = SAM.readline()
 
-    # Read through Reads, remove duplicates, and write results out:
-    output_file = args.f.strip('.sam')+'_deduped.sam'
-    read_chunker(line, umis, args.dup_keep, args.p, args.s, output_file)
+        while line: # While the EOF has not been read in:
+    
+            line = Read(line) # Create read object from current line
+            next_line = SAM.readline() # Read in the next read line
+
+            if next_line == '': # If the next line read in is the EOF, break
+                break
+
+            next_line = Read(next_line) # Create a read object from line (this is a separate step as to not raise an error passing '' to Read())
+
+            if umis != [] and line.tag not in umis: # If specific UMIs have been specified, and the read does not have a valid ID, skip that read and do not write it to the output!
+                line = next_line.raw
+                removed_u += 1 # Increment invalid umi count
+
+            else: # If UMIs have not been specified, or line.tag is in UMIs, proceed:
+
+                if dup_keep == '': # If we want to keep the first of any duplicates:
+                    while line.chars == next_line.chars: # While the reads match on duplicate characteristics, read in lines to next_line until they don't match
+                        next_line = SAM.readline() 
+                        if next_line == '': # Again, if the next line read in is the EOF, break
+                            break
+                        next_line = Read(next_line)
+                        removed_d += 1 #Increment the duplicate count
+
+                    with open(file_out,'a') as out_sam: # At the point the two reads are no longer duplicates, write the first read out
+                        out_sam.write(line.raw)
+
+                    line = next_line.raw # Set the last line read in as the next_read as the new comparitor line
+
+                elif dup_keep == 'Q':
+                    dups = [] # Create a list for the duplicates
+                    while line.chars == next_line.chars: # While the reads match on duplicate characteristics, read in lines to next_line until they don't match
+                        dups.append(next_line) # Add the duplicate read to the list
+                        next_line = SAM.readline() 
+                        if next_line == '': # Again, if the next line read in is the EOF, break
+                            break
+                        next_line = Read(next_line)
+                        removed_d += 1 #Increment the duplicate count
+
+                    if len(dups) > 0: # If there are any duplicates found:
+                        dups.append(line) # Also need to append the first read, since it is a duplicate as well!
+                        max_q = 0 # Start the max quality at 0
+                        for read in dups:
+                            if read.qual >= max_q: # For each read in the set of duplicates, see if it has a higher quality than the current max
+                                max_q = read.qual # If so, set that read's quality as the nex max
+                                keep = read # set that read to keep
+
+                        line = keep # Whatever read ends up being the one to keep, set line to be that (as that will be written out)
+
+                    with open(file_out,'a') as out_sam:
+                        out_sam.write(line.raw)
+
+                    line = next_line.raw # Set the last line read in as the next_read as the new comparitor line
+
+                elif dup_keep == 'R':
+                    dups = [] # Create a list for the duplicates
+                    while line.chars == next_line.chars: # While the reads match on duplicate characteristics, read in lines to next_line until they don't match
+                        dups.append(next_line) # Add the duplicate read to the list
+                        next_line = SAM.readline() 
+                        if next_line == '': # Again, if the next line read in is the EOF, break
+                            break
+                        next_line = Read(next_line)
+                        removed_d += 1 #Increment the duplicate count
+
+                    if len(dups) > 0: # If there are any duplicates found:
+                        dups.append(line) # Also need to append the first read, since it is a duplicate as well!
+                        line = random.choice(dups) # Pick a random choice among the duplicates to keep
+
+                    with open(file_out,'a') as out_sam:
+                        out_sam.write(line.raw)
+
+                    line = next_line.raw # Set the last line read in as the next_read as the new comparitor line
+
+
+        return [removed_d, removed_u]
+
+
+def summary_getter(sum_flag, file_in, counts, reads):
+    if sum_flag == True: # If specified that the user wants the summary output file:
+        with open('Dedup_summary.out','w') as sum_out:
+            sum_out.write("Summary of PCR duplicate removal for "+file_in.split('/')[-1]+":\n")
+            sum_out.write(str("Number of Reads Processed: "+str(reads)+"\n"))
+            sum_out.write(str("Number of Reads Removed as Dups: "+str(counts[0])+"\n"))
+            sum_out.write(str("Number of Reads Removed for Incorrect UMIs: "+str(counts[1])+"\n"))
+
+
+####################
+## Main function: ##
+####################
+args = get_arguments() # Get passed in arguments
+
+if args.p == True:
+    raise ValueError('Cannot Currently Process Paired reads. Please do not specify flag at this time') # Can't handle paired end reads yet
+
+if args.dup_keep not in ['Q','R','']:
+    raise ValueError('Duplicate Keep argument is not valid, must use "Q", "R", or ""') # Throw error if improper keep flag given
+
+umis = []
+if args.u != '':
+    umis = umi_list(args.u)
+
+true_char(args.f)
+reads_processed = sort_by_true(args.f)
+those_removed = dup_remover('Output.sam',args.f+'_deduped',umis,args.dup_keep)
+
+if args.s == True:
+    summary_getter(args.s, args.f, those_removed, reads_processed)
+
+## Clean up:
+os.remove('Output.sam') # Remove Output temp file
+
+for line in fileinput.input(args.f, inplace=True): # Open the input file and remove the extra column from each of the reads
+    if line.startswith('@'):
+        print(line.strip('\n'))
+
+    else:
+        line = '\t'.join(line.split('\t')[:-1])
+        print(line)
+
+
+for line in fileinput.input(args.f+'_deduped', inplace=True): # Open the output file and do the same
+    if line.startswith('@'):
+        print(line.strip('\n'))
+
+    else:
+        line = '\t'.join(line.split('\t')[:-1])
+        print(line)
+
 
