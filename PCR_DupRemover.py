@@ -1,4 +1,4 @@
-#!/Users/Adrian/miniconda3/bin/python3
+#!/usr/bin/python
 # Adrian Bubie
 # 1/12/18
 
