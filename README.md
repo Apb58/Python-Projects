@@ -12,3 +12,5 @@ Small Projects or applications written in Python:
 
 5. *Gene Validator*: Text list comparison script that takes two lists of genes as inputs; compares one list 1 against list 2 (index) to determine if there are any gene names in list 1 that are NOT in list 2.
 
+6. *Range Checker*: Determines is a list of genomic coordinates are covered by a reference list of genomic coordinate ranges.
+
